@@ -3,8 +3,9 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import json
-import os
 from datetime import datetime, date
+import gspread
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="スイングトレード分析システム", layout="wide")
 
@@ -65,35 +66,67 @@ footer { visibility: hidden; }
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 💾 データベース機能
+# 📊 Googleスプレッドシート連携機能
 # ==========================================
-DATA_FILE = "trade_data.json"
+@st.cache_resource
+def get_gspread_sheet():
+    try:
+        scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_url(st.secrets["spreadsheet_url"]).sheet1
+        return sheet
+    except Exception as e:
+        st.error(f"スプレッドシート接続エラー: {e}")
+        return None
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            pass
-    return {"portfolio": [], "cash_balance": 0.0, "total_invested": 0.0, "history_dict": {}}
+def load_data_from_sheet():
+    sheet = get_gspread_sheet()
+    if not sheet:
+        return {"portfolio": [], "cash_balance": 0.0, "total_invested": 0.0, "history_dict": {}}
+    
+    try:
+        records = sheet.get_all_records()
+        portfolio = []
+        for r in records:
+            if str(r.get("コード", "")).strip():
+                portfolio.append({
+                    "コード": str(r.get("コード")),
+                    "銘柄名": str(r.get("銘柄名")),
+                    "買値": float(r.get("買値", 0)),
+                    "株数": int(r.get("株数", 0)),
+                    "購入日": str(r.get("購入日", ""))
+                })
+        return {"portfolio": portfolio, "cash_balance": 0.0, "total_invested": 0.0, "history_dict": {}}
+    except:
+        return {"portfolio": [], "cash_balance": 0.0, "total_invested": 0.0, "history_dict": {}}
 
-def save_data():
-    data = {
-        "portfolio": st.session_state.portfolio,
-        "cash_balance": st.session_state.cash_balance,
-        "total_invested": st.session_state.total_invested,
-        "history_dict": st.session_state.history_dict
-    }
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def save_data_to_sheet():
+    sheet = get_gspread_sheet()
+    if not sheet: return
+    
+    try:
+        sheet.clear()
+        header = ["コード", "銘柄名", "買値", "株数", "購入日"]
+        rows = [header]
+        for p in st.session_state.portfolio:
+            rows.append([
+                str(p.get("コード", "")),
+                str(p.get("銘柄名", "")),
+                p.get("買値", 0),
+                p.get("株数", 0),
+                str(p.get("購入日", ""))
+            ])
+        sheet.update('A1', rows)
+    except Exception as e:
+        st.error(f"スプレッドシート書き込みエラー: {e}")
 
 if "data_loaded" not in st.session_state:
-    saved_data = load_data()
+    saved_data = load_data_from_sheet()
     st.session_state.portfolio = saved_data["portfolio"]
-    st.session_state.cash_balance = saved_data["cash_balance"]
-    st.session_state.total_invested = saved_data["total_invested"]
-    st.session_state.history_dict = saved_data["history_dict"]
+    st.session_state.cash_balance = saved_data.get("cash_balance", 0.0)
+    st.session_state.total_invested = saved_data.get("total_invested", 0.0)
+    st.session_state.history_dict = saved_data.get("history_dict", {})
     st.session_state.confirm_sell_idx = None
     st.session_state.data_loaded = True
 
@@ -201,14 +234,13 @@ else:
                     if st.session_state.portfolio[i]['株数'] <= 0:
                         st.session_state.portfolio.pop(i)
                     st.session_state.confirm_sell_idx = None
-                    save_data()
+                    save_data_to_sheet()
                     st.rerun()
             with col_cancel:
                 if st.button("❌ 戻る", key=f"cancel_{i}", use_container_width=True):
                     st.session_state.confirm_sell_idx = None
                     st.rerun()
         else:
-            # 買い値・保有株数と売却ボタンを横並びにして1行節約
             col_info, col_btn = st.sidebar.columns([6, 4])
             with col_info:
                 st.markdown(f"<div style='font-size:12px; color:#5F6368; padding-top:6px;'>買値: {p['買値']:,.0f}円<br>保有: {p['株数']}株</div>", unsafe_allow_html=True)
@@ -241,7 +273,7 @@ with st.sidebar.form("add_stock_form", clear_on_submit=True):
                 "株数": new_shares,
                 "購入日": new_date.strftime("%Y-%m-%d")
             })
-            save_data()
+            save_data_to_sheet()
             st.rerun()
 
 # ==========================================
@@ -272,12 +304,14 @@ for p in st.session_state.portfolio:
     buy_price = float(p["買値"])
     shares = int(p["株数"])
     
-    # 保有日数の計算 (購入日当日を1日目とする)
     buy_date_str = p.get("購入日")
     days_held = None
     if buy_date_str:
-        buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
-        days_held = (date.today() - buy_date).days + 1
+        try:
+            buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+            days_held = (date.today() - buy_date).days + 1
+        except:
+            pass
 
     data = get_advanced_stock_data(ticker)
     if data:
@@ -320,10 +354,6 @@ for p in st.session_state.portfolio:
 
 total_assets = st.session_state.cash_balance + current_portfolio_value
 total_return = total_assets - st.session_state.total_invested
-
-current_month = pd.Timestamp.today().strftime('%Y-%m')
-st.session_state.history_dict[current_month] = total_assets
-save_data()
 
 if not portfolio_details:
     overall_text = "現在保有している銘柄はありません。AIスコアランキングで「買い推奨」が出ている銘柄をチェックして新規ポジションの検討を行いましょう。"
@@ -396,8 +426,4 @@ with tab2:
 
 with tab3:
     st.header("■ 運用サマリー (月次資産推移)")
-    if len(st.session_state.history_dict) <= 1 and list(st.session_state.history_dict.values())[0] == 0:
-        st.info("💡 まだ運用実績がありません。銘柄を追加して運用を開始すると、ここに月ごとの資産推移グラフが生成されます。")
-    else:
-        df_history = pd.DataFrame(list(st.session_state.history_dict.items()), columns=["月", "総資産額(円)"]).set_index("月")
-        st.line_chart(df_history)
+    st.info("💡 スプレッドシート連携が完了しました。銘柄を追加するとリアルタイムにGoogleスプレッドシートへ自動保存されます。")
