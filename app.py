@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import json
 import os
+from datetime import datetime, date
 
 st.set_page_config(page_title="スイングトレード分析システム", layout="wide")
 
@@ -39,6 +40,7 @@ footer { visibility: hidden; }
 
 .badge-green { background-color: #E6F4EA; color: #137333; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; display: inline-block; }
 .badge-gray { background-color: #F1F3F4; color: #5F6368; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; display: inline-block; }
+.badge-blue { background-color: #E8F0FE; color: #1967D2; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; display: inline-block; margin-right: 4px; }
 .badge-yellow { background-color: #FEF7E0; color: #B06000; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; display: inline-block; }
 .badge-red { background-color: #FCE8E6; color: #C5221F; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; display: inline-block; }
 
@@ -172,7 +174,7 @@ def get_advanced_stock_data(ticker_symbol):
 # ==========================================
 st.sidebar.markdown("### 🔄 データの更新")
 if st.sidebar.button("最新の株価・AI判定を取得", type="primary", use_container_width=True):
-    st.cache_data.clear() # キャッシュをクリアして強制再取得
+    st.cache_data.clear()
     st.rerun()
 st.sidebar.divider()
 
@@ -182,7 +184,6 @@ if not st.session_state.portfolio:
 else:
     for i, p in enumerate(st.session_state.portfolio):
         st.sidebar.markdown(f"**{p['コード']} {p['銘柄名']}**")
-        st.sidebar.caption(f"買値: {p['買値']:,.0f}円 / 保有: {p['株数']}株")
         
         if st.session_state.confirm_sell_idx == i:
             st.sidebar.warning("⚠️ 本当に売却しますか？内容を確認してください。")
@@ -207,9 +208,14 @@ else:
                     st.session_state.confirm_sell_idx = None
                     st.rerun()
         else:
-            if st.sidebar.button("売却する...", key=f"btn_{i}", use_container_width=True):
-                st.session_state.confirm_sell_idx = i
-                st.rerun()
+            # 買い値・保有株数と売却ボタンを横並びにして1行節約
+            col_info, col_btn = st.sidebar.columns([6, 4])
+            with col_info:
+                st.markdown(f"<div style='font-size:12px; color:#5F6368; padding-top:6px;'>買値: {p['買値']:,.0f}円<br>保有: {p['株数']}株</div>", unsafe_allow_html=True)
+            with col_btn:
+                if st.button("売却", key=f"btn_{i}", use_container_width=True):
+                    st.session_state.confirm_sell_idx = i
+                    st.rerun()
         st.sidebar.divider()
 
 st.sidebar.header("➕ 新規銘柄の追加")
@@ -218,6 +224,7 @@ with st.sidebar.form("add_stock_form", clear_on_submit=True):
     new_name = st.text_input("銘柄名 (例: トヨタ自動車)")
     new_buy = st.number_input("買値 (円)", min_value=0, step=1, value=0)
     new_shares = st.number_input("株数", min_value=1, step=1, value=100)
+    new_date = st.date_input("購入日", value=date.today())
     
     if st.form_submit_button("ポートフォリオに追加"):
         if new_code and new_name and new_buy > 0:
@@ -227,7 +234,13 @@ with st.sidebar.form("add_stock_form", clear_on_submit=True):
                 st.session_state.cash_balance = 0.0
             else:
                 st.session_state.cash_balance -= cost
-            st.session_state.portfolio.append({"コード": new_code, "銘柄名": new_name, "買値": new_buy, "株数": new_shares})
+            st.session_state.portfolio.append({
+                "コード": new_code, 
+                "銘柄名": new_name, 
+                "買値": new_buy, 
+                "株数": new_shares,
+                "購入日": new_date.strftime("%Y-%m-%d")
+            })
             save_data()
             st.rerun()
 
@@ -258,6 +271,13 @@ for p in st.session_state.portfolio:
     name = str(p["銘柄名"]).strip()
     buy_price = float(p["買値"])
     shares = int(p["株数"])
+    
+    # 保有日数の計算 (購入日当日を1日目とする)
+    buy_date_str = p.get("購入日")
+    days_held = None
+    if buy_date_str:
+        buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
+        days_held = (date.today() - buy_date).days + 1
 
     data = get_advanced_stock_data(ticker)
     if data:
@@ -287,13 +307,15 @@ for p in st.session_state.portfolio:
 
         individual_advices.append({
             "code": ticker, "name": name, "profit_pct": profit_pct, 
-            "score": data["score"], "status_tag": status_tag, "action_text": action_text
+            "score": data["score"], "status_tag": status_tag, "action_text": action_text,
+            "days_held": days_held
         })
 
         portfolio_details.append({
             "ticker": ticker, "name": name, "buy_price": buy_price, "shares": shares, 
             "current_price": data["close"], "current_val": current_val, "profit": profit, 
-            "profit_pct": profit_pct, "target": ai_target, "stop": ai_stop, "score": data["score"]
+            "profit_pct": profit_pct, "target": ai_target, "stop": ai_stop, "score": data["score"],
+            "days_held": days_held
         })
 
 total_assets = st.session_state.cash_balance + current_portfolio_value
@@ -303,7 +325,6 @@ current_month = pd.Timestamp.today().strftime('%Y-%m')
 st.session_state.history_dict[current_month] = total_assets
 save_data()
 
-# 全体総評のテキスト自動生成
 if not portfolio_details:
     overall_text = "現在保有している銘柄はありません。AIスコアランキングで「買い推奨」が出ている銘柄をチェックして新規ポジションの検討を行いましょう。"
 else:
@@ -343,7 +364,8 @@ with tab1:
         for adv in individual_advices:
             sign = "+" if adv['profit_pct'] > 0 else ""
             p_color = "#0F9D58" if adv['profit_pct'] >= 0 else "#D23F31"
-            st.markdown(f'<div class="ai-advice-card"><div class="ai-advice-header"><div>【{adv["code"]} {adv["name"]}】 <span style="font-size:13px; color:{p_color}; font-weight:normal;">損益: {sign}{adv["profit_pct"]:.1f}%</span></div><div><span class="badge-gray">{adv["status_tag"]}</span></div></div><div style="font-size:13px; color:#5F6368; margin-bottom:6px;">AIスコア: <strong>{adv["score"]}点</strong></div><div class="ai-action-box"><div style="font-size:14px; color:#202124;">{adv["action_text"]}</div></div></div>', unsafe_allow_html=True)
+            days_badge = f"<span class='badge-blue'>保有 {adv['days_held']}日目</span>" if adv['days_held'] else ""
+            st.markdown(f'<div class="ai-advice-card"><div class="ai-advice-header"><div>【{adv["code"]} {adv["name"]}】 <span style="font-size:13px; color:{p_color}; font-weight:normal;">損益: {sign}{adv["profit_pct"]:.1f}%</span></div><div>{days_badge}<span class="badge-gray">{adv["status_tag"]}</span></div></div><div style="font-size:13px; color:#5F6368; margin-bottom:6px;">AIスコア: <strong>{adv["score"]}点</strong></div><div class="ai-action-box"><div style="font-size:14px; color:#202124;">{adv["action_text"]}</div></div></div>', unsafe_allow_html=True)
 
     html_table = '<div class="ranking-card"><div class="ranking-title">日経225主要銘柄 AIスコアランキング</div><div class="table-responsive"><table class="custom-table"><tr><th>順位</th><th>銘柄</th><th>現在値 (推奨買値)</th><th>AI利確目安</th><th>AIスコア</th><th>推奨アクション</th></tr>'
     for idx, cand in enumerate(candidates):
@@ -366,8 +388,9 @@ with tab2:
             r_diff = p['target'] - p['stop']
             prog_pct = min(max((p['current_price'] - p['stop']) / r_diff * 100, 0.0), 100.0) if r_diff > 0 else 50.0
             p_color, p_sign = ("color-up", "+") if p['profit'] >= 0 else ("color-down", "")
+            days_str = f" <br><span style='font-size:12px; font-weight:bold; color:#1967D2;'>(保有 {p['days_held']}日目)</span>" if p['days_held'] else ""
             
-            html_port += f'<tr><td><div style="font-weight:bold; color:#202124;">{p["name"]}</div><div style="font-size:12px; color:#5F6368;">{p["ticker"]}</div></td><td><div style="font-size:15px; color:#202124;">{p["buy_price"]:,.0f}円</div><div style="font-size:13px; color:#5F6368;">{p["shares"]}株</div></td><td><div style="font-size:16px; font-weight:bold; color:#202124;">{p["current_price"]:,.1f}円</div></td><td><div class="{p_color}" style="font-size:16px; font-weight:bold;">{p_sign}{p["profit"]:,.0f}円</div><div class="{p_color}" style="font-size:13px;">({p_sign}{p["profit_pct"]:.1f}%)</div></td><td><div style="font-size:16px; font-weight:bold; color:#202124;">{p["score"]}<span style="font-size:13px; font-weight:normal; color:#5F6368;">点</span></div></td><td>{badge}</td></tr><tr><td colspan="6" style="padding: 0; border-bottom: 1px solid #E8EAED;"><div style="display:flex; align-items:center; padding: 12px 16px; background-color:#FAFAFA; font-size:12px; color:#5F6368;"><div style="width:70px; text-align:right;">AI損切<br><span style="font-size:14px; font-weight:bold; color:#202124;">{p["stop"]:,.0f}円</span></div><div style="flex-grow:1; height:6px; background-color:#E8EAED; border-radius:3px; margin: 0 16px; position:relative;"><div style="position:absolute; left: {prog_pct}%; top:-4px; width:14px; height:14px; background-color:#1967D2; border-radius:50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transform: translateX(-50%);"></div></div><div style="width:70px; text-align:left;">AI利確<br><span style="font-size:14px; font-weight:bold; color:#202124;">{p["target"]:,.0f}円</span></div></div></td></tr>'
+            html_port += f'<tr><td><div style="font-weight:bold; color:#202124;">{p["name"]}</div><div style="font-size:12px; color:#5F6368;">{p["ticker"]}</div></td><td><div style="font-size:15px; color:#202124;">{p["buy_price"]:,.0f}円</div><div style="font-size:13px; color:#5F6368;">{p["shares"]}株{days_str}</div></td><td><div style="font-size:16px; font-weight:bold; color:#202124;">{p["current_price"]:,.1f}円</div></td><td><div class="{p_color}" style="font-size:16px; font-weight:bold;">{p_sign}{p["profit"]:,.0f}円</div><div class="{p_color}" style="font-size:13px;">({p_sign}{p["profit_pct"]:.1f}%)</div></td><td><div style="font-size:16px; font-weight:bold; color:#202124;">{p["score"]}<span style="font-size:13px; font-weight:normal; color:#5F6368;">点</span></div></td><td>{badge}</td></tr><tr><td colspan="6" style="padding: 0; border-bottom: 1px solid #E8EAED;"><div style="display:flex; align-items:center; padding: 12px 16px; background-color:#FAFAFA; font-size:12px; color:#5F6368;"><div style="width:70px; text-align:right;">AI損切<br><span style="font-size:14px; font-weight:bold; color:#202124;">{p["stop"]:,.0f}円</span></div><div style="flex-grow:1; height:6px; background-color:#E8EAED; border-radius:3px; margin: 0 16px; position:relative;"><div style="position:absolute; left: {prog_pct}%; top:-4px; width:14px; height:14px; background-color:#1967D2; border-radius:50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transform: translateX(-50%);"></div></div><div style="width:70px; text-align:left;">AI利確<br><span style="font-size:14px; font-weight:bold; color:#202124;">{p["target"]:,.0f}円</span></div></div></td></tr>'
         html_port += '</table></div></div>'
         st.markdown(html_port, unsafe_allow_html=True)
 
