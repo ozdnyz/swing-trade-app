@@ -17,18 +17,15 @@ if "close_sidebar" not in st.session_state:
     st.session_state.close_sidebar = False
 
 if st.session_state.close_sidebar:
-    # ページがリロードされた直後にJSを実行し、サイドバーを自動で閉じる
     components.html(
         """
         <script>
             setTimeout(function() {
                 const doc = window.parent.document;
-                // PC用・一部スマホ用の閉じるボタンを探してクリック
                 const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"]');
                 if (btn) {
                     btn.click();
                 } else {
-                    // 見つからない場合（スマホのオーバーレイ等）はESCキー判定を送信して閉じる
                     doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
                 }
             }, 50);
@@ -276,7 +273,6 @@ def get_advanced_stock_data(ticker_symbol):
 st.sidebar.markdown("### 🔄 データの更新")
 if st.sidebar.button("最新の株価・AI判定を取得", type="primary", use_container_width=True):
     st.cache_data.clear()
-    # ボタンが押されたらフラグを立ててリロード（リロード後に閉じる処理が走ります）
     st.session_state.close_sidebar = True
     st.rerun()
 st.sidebar.divider()
@@ -426,8 +422,11 @@ total_assets = st.session_state.cash_balance + current_portfolio_value
 total_return = total_assets - st.session_state.total_invested
 
 current_month = pd.Timestamp.today().strftime('%Y-%m')
-st.session_state.history_dict[current_month] = total_assets
-save_data_to_sheet()
+if st.session_state.history_dict.get(current_month) != total_assets:
+    st.session_state.history_dict[current_month] = total_assets
+    # 【安全装置】データが空ではない時だけ保存する（誤消去ストップ）
+    if len(st.session_state.portfolio) > 0 or st.session_state.total_invested > 0 or st.session_state.cash_balance > 0:
+        save_data_to_sheet()
 
 if not portfolio_details:
     overall_text = "現在保有している銘柄はありません。AIスコアランキングで「買い推奨」が出ている銘柄をチェックして新規ポジションの検討を行いましょう。"
