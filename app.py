@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -88,17 +89,38 @@ def load_data_from_sheet():
     try:
         records = sheet.get_all_records()
         portfolio = []
-        for r in records:
-            if str(r.get("コード", "")).strip():
+        cash_balance = 0.0
+        total_invested = 0.0
+        history_dict = {}
+        
+        for i, r in enumerate(records):
+            if i == 0:
+                try:
+                    cb = r.get("_cash_balance", "")
+                    cash_balance = float(cb) if cb != "" else 0.0
+                    ti = r.get("_total_invested", "")
+                    total_invested = float(ti) if ti != "" else 0.0
+                    hd = r.get("_history_dict", "")
+                    history_dict = json.loads(hd) if hd != "" else {}
+                except:
+                    pass
+
+            code = str(r.get("コード", "")).strip()
+            if code:
                 portfolio.append({
-                    "コード": str(r.get("コード")),
-                    "銘柄名": str(r.get("銘柄名")),
-                    "買値": float(r.get("買値", 0)),
-                    "株数": int(r.get("株数", 0)),
+                    "コード": code,
+                    "銘柄名": str(r.get("銘柄名", "")),
+                    "買値": float(r.get("買値", 0) if r.get("買値", "") != "" else 0),
+                    "株数": int(r.get("株数", 0) if r.get("株数", "") != "" else 0),
                     "購入日": str(r.get("購入日", ""))
                 })
-        return {"portfolio": portfolio, "cash_balance": 0.0, "total_invested": 0.0, "history_dict": {}}
-    except:
+                
+        if total_invested == 0.0 and len(portfolio) > 0:
+            for p in portfolio:
+                total_invested += float(p["買値"]) * int(p["株数"])
+                
+        return {"portfolio": portfolio, "cash_balance": cash_balance, "total_invested": total_invested, "history_dict": history_dict}
+    except Exception as e:
         return {"portfolio": [], "cash_balance": 0.0, "total_invested": 0.0, "history_dict": {}}
 
 def save_data_to_sheet():
@@ -107,16 +129,34 @@ def save_data_to_sheet():
     
     try:
         sheet.clear()
-        header = ["コード", "銘柄名", "買値", "株数", "購入日"]
+        header = ["コード", "銘柄名", "買値", "株数", "購入日", "_cash_balance", "_total_invested", "_history_dict"]
         rows = [header]
-        for p in st.session_state.portfolio:
-            rows.append([
-                str(p.get("コード", "")),
-                str(p.get("銘柄名", "")),
-                p.get("買値", 0),
-                p.get("株数", 0),
-                str(p.get("購入日", ""))
-            ])
+        
+        count = max(1, len(st.session_state.portfolio))
+        for i in range(count):
+            if i < len(st.session_state.portfolio):
+                p = st.session_state.portfolio[i]
+                row = [
+                    str(p.get("コード", "")),
+                    str(p.get("銘柄名", "")),
+                    p.get("買値", 0),
+                    p.get("株数", 0),
+                    str(p.get("購入日", ""))
+                ]
+            else:
+                row = ["", "", "", "", ""]
+                
+            if i == 0:
+                row.extend([
+                    st.session_state.cash_balance,
+                    st.session_state.total_invested,
+                    json.dumps(st.session_state.history_dict)
+                ])
+            else:
+                row.extend(["", "", ""])
+                
+            rows.append(row)
+            
         sheet.update('A1', rows)
     except Exception as e:
         st.error(f"スプレッドシート書き込みエラー: {e}")
@@ -208,6 +248,18 @@ def get_advanced_stock_data(ticker_symbol):
 st.sidebar.markdown("### 🔄 データの更新")
 if st.sidebar.button("最新の株価・AI判定を取得", type="primary", use_container_width=True):
     st.cache_data.clear()
+    # スマホ環境等でサイドバーを自動でたたむJSスクリプトを実行
+    components.html(
+        """
+        <script>
+            var button = window.parent.document.querySelector('button[data-testid="stSidebarCollapseButton"]');
+            if (button) {
+                button.click();
+            }
+        </script>
+        """,
+        height=0,
+    )
     st.rerun()
 st.sidebar.divider()
 
@@ -355,6 +407,10 @@ for p in st.session_state.portfolio:
 total_assets = st.session_state.cash_balance + current_portfolio_value
 total_return = total_assets - st.session_state.total_invested
 
+current_month = pd.Timestamp.today().strftime('%Y-%m')
+st.session_state.history_dict[current_month] = total_assets
+save_data_to_sheet()
+
 if not portfolio_details:
     overall_text = "現在保有している銘柄はありません。AIスコアランキングで「買い推奨」が出ている銘柄をチェックして新規ポジションの検討を行いましょう。"
 else:
@@ -426,4 +482,8 @@ with tab2:
 
 with tab3:
     st.header("■ 運用サマリー (月次資産推移)")
-    st.info("💡 スプレッドシート連携が完了しました。銘柄を追加するとリアルタイムにGoogleスプレッドシートへ自動保存されます。")
+    if len(st.session_state.history_dict) <= 1 and list(st.session_state.history_dict.values())[0] == 0:
+        st.info("💡 スプレッドシート連携が完了しました。運用実績が蓄積されると、ここに月ごとの資産推移グラフが生成されます。")
+    else:
+        df_history = pd.DataFrame(list(st.session_state.history_dict.items()), columns=["月", "総資産額(円)"]).set_index("月")
+        st.line_chart(df_history)
