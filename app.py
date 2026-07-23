@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -11,31 +10,6 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="スイングトレード分析システム", layout="wide")
 
 # ==========================================
-# 🛠️ サイドバー自動閉鎖ロジック
-# ==========================================
-if "close_sidebar" not in st.session_state:
-    st.session_state.close_sidebar = False
-
-if st.session_state.close_sidebar:
-    components.html(
-        """
-        <script>
-            setTimeout(function() {
-                const doc = window.parent.document;
-                const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"]');
-                if (btn) {
-                    btn.click();
-                } else {
-                    doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
-                }
-            }, 50);
-        </script>
-        """,
-        height=0,
-    )
-    st.session_state.close_sidebar = False
-
-# ==========================================
 # 🎨 CSS（スマホ最適化・レスポンシブ）
 # ==========================================
 st.markdown("""
@@ -43,7 +17,7 @@ st.markdown("""
 header { background-color: transparent !important; }
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-.block-container { padding-top: 2rem; }
+.block-container { padding-top: 1.5rem; }
 .stApp { background-color: #F4F6F8; }
 
 .alert-banner { background-color: #FCE8E6; color: #B31412; padding: 16px 20px; border-radius: 4px; border-left: 4px solid #B31412; margin-bottom: 24px; display: flex; align-items: flex-start; gap: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
@@ -273,7 +247,6 @@ def get_advanced_stock_data(ticker_symbol):
 st.sidebar.markdown("### 🔄 データの更新")
 if st.sidebar.button("最新の株価・AI判定を取得", type="primary", use_container_width=True):
     st.cache_data.clear()
-    st.session_state.close_sidebar = True
     st.rerun()
 st.sidebar.divider()
 
@@ -424,7 +397,6 @@ total_return = total_assets - st.session_state.total_invested
 current_month = pd.Timestamp.today().strftime('%Y-%m')
 if st.session_state.history_dict.get(current_month) != total_assets:
     st.session_state.history_dict[current_month] = total_assets
-    # 【安全装置】データが空ではない時だけ保存する（誤消去ストップ）
     if len(st.session_state.portfolio) > 0 or st.session_state.total_invested > 0 or st.session_state.cash_balance > 0:
         save_data_to_sheet()
 
@@ -442,6 +414,15 @@ else:
 # ==========================================
 # 🖥️ 画面描画
 # ==========================================
+# メイン画面ヘッダーエリア（右端にグルグルマーク更新ボタンを追加）
+col_head, col_refresh = st.columns([8.5, 1.5])
+with col_head:
+    st.caption("スイングトレード AI分析＆ポートフォリオ管理")
+with col_refresh:
+    if st.button("🔄", key="main_refresh_btn", help="最新データに更新"):
+        st.cache_data.clear()
+        st.rerun()
+
 tab1, tab2, tab3 = st.tabs(["❖ 総合ダッシュボード", "💼 ポートフォリオ", "📊 運用サマリー"])
 
 with tab1:
