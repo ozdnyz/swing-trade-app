@@ -11,6 +11,34 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="スイングトレード分析システム", layout="wide")
 
 # ==========================================
+# 🛠️ サイドバー自動閉鎖ロジック
+# ==========================================
+if "close_sidebar" not in st.session_state:
+    st.session_state.close_sidebar = False
+
+if st.session_state.close_sidebar:
+    # ページがリロードされた直後にJSを実行し、サイドバーを自動で閉じる
+    components.html(
+        """
+        <script>
+            setTimeout(function() {
+                const doc = window.parent.document;
+                // PC用・一部スマホ用の閉じるボタンを探してクリック
+                const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"]');
+                if (btn) {
+                    btn.click();
+                } else {
+                    // 見つからない場合（スマホのオーバーレイ等）はESCキー判定を送信して閉じる
+                    doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
+                }
+            }, 50);
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state.close_sidebar = False
+
+# ==========================================
 # 🎨 CSS（スマホ最適化・レスポンシブ）
 # ==========================================
 st.markdown("""
@@ -248,18 +276,8 @@ def get_advanced_stock_data(ticker_symbol):
 st.sidebar.markdown("### 🔄 データの更新")
 if st.sidebar.button("最新の株価・AI判定を取得", type="primary", use_container_width=True):
     st.cache_data.clear()
-    # スマホ環境等でサイドバーを自動でたたむJSスクリプトを実行
-    components.html(
-        """
-        <script>
-            var button = window.parent.document.querySelector('button[data-testid="stSidebarCollapseButton"]');
-            if (button) {
-                button.click();
-            }
-        </script>
-        """,
-        height=0,
-    )
+    # ボタンが押されたらフラグを立ててリロード（リロード後に閉じる処理が走ります）
+    st.session_state.close_sidebar = True
     st.rerun()
 st.sidebar.divider()
 
